@@ -14,7 +14,6 @@ cmd = (
     f"./Autovisor.py "
     f"--exclude-module cv2 "
     f"--exclude-module numpy "
-    f"--exclude-module matplotlib "
 )
 os.system(cmd)
 

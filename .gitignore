@@ -1,8 +1,9 @@
-Releases/
 build/
 dist/
-res/userdata.json
-res/cookies.json
+res/*
+!res/QRcode.jpg
+!res/stealth.min.js
+!res/zhs.ico
 .obsidian/
 .idea/
 __pycache__/
@@ -11,4 +12,3 @@ __pycache__/
 captcha/
 logs/
 ./preview/*
-

@@ -1,10 +1,11 @@
 import ctypes
 import json
+import os
 import os.path
-import traceback
 from typing import List
 from playwright.async_api import Page, Locator
 from playwright.async_api import TimeoutError
+from playwright._impl._errors import TargetClosedError
 from pygetwindow import Win32Window
 
 from modules.configs import Config
@@ -13,6 +14,14 @@ import pygetwindow as gw
 from modules.logger import Logger
 
 logger = Logger()
+
+
+def get_runtime_root():
+    return logger.runtime_root
+
+
+def get_runtime_path(*parts):
+    return os.path.join(get_runtime_root(), *parts)
 
 def save_cookies(cookies, filename="cookies.json"):
     """保存登录Cookies到文件"""
@@ -29,6 +38,11 @@ def load_cookies(filename="cookies.json"):
     except json.JSONDecodeError:
         return None
 
+
+def clear_cookies(filename="cookies.json"):
+    if os.path.exists(filename):
+        os.remove(filename)
+
 # 将python终端前置
 def bring_console_to_front():
     # 获取当前控制台窗口句柄
@@ -41,6 +55,8 @@ def bring_console_to_front():
 async def display_window(page: Page) -> None:
     window = await get_browser_window(page)
     if window:
+        window.show()
+        window.restore()
         window.moveTo(100, 100)
         logger.info("播放窗口已自动前置.", shift=True)
     else:
@@ -50,8 +66,8 @@ async def display_window(page: Page) -> None:
 async def hide_window(page: Page) -> None:
     window = await get_browser_window(page)
     if window:
-        window.moveTo(-3200, -3200)
-        logger.info("播放窗口已自动隐藏.")
+        window.hide()
+        logger.info("播放窗口已自动隐藏,将在需要安全验证时显示.")
     else:
         logger.warn("未找到播放窗口!")
 
@@ -75,9 +91,11 @@ async def evaluate_js(page: Page, wait_selector, js: str, timeout=None, is_hike_
             await page.wait_for_selector(wait_selector, timeout=timeout)
         if is_hike_class is False:
             await page.evaluate(js)
+    except TargetClosedError as e:
+        logger.debug(f"浏览器关闭时停止执行页面脚本: {logger.summarize_exception(e)}")
+        return
     except Exception as e:
-        logger.write_log(f"Exec JS failed: {js} Selector:{wait_selector} Error:{repr(e)}\n")
-        logger.write_log(traceback.format_exc())
+        logger.log_exception(f"执行页面脚本失败. Selector: {wait_selector} JS: {js}", e)
         return
 
 
@@ -87,9 +105,11 @@ async def evaluate_on_element(page: Page, selector: str, js: str, timeout: float
         if selector and is_hike_class is False:
             element = page.locator(selector).first
             await element.evaluate(js, timeout=timeout)
+    except TargetClosedError as e:
+        logger.debug(f"浏览器关闭时停止执行元素脚本: {logger.summarize_exception(e)}")
+        return
     except Exception as e:
-        logger.write_log(f"Exec JS failed: Selector:{selector} JS:{js} Error:{repr(e)}\n")
-        logger.write_log(traceback.format_exc())
+        logger.log_exception(f"执行元素脚本失败. Selector: {selector} JS: {js}", e)
         return
 
 
@@ -107,9 +127,11 @@ async def optimize_page(page: Page, config: Config, is_new_version=False, is_hik
                 await evaluate_on_element(page, ".aiMsg.once", "el=>el.remove()", timeout=1500)
                 logger.info("页面优化完成!")
 
+    except TargetClosedError as e:
+        logger.debug(f"浏览器关闭时停止页面优化: {logger.summarize_exception(e)}")
+        return
     except Exception as e:
-        logger.write_log(f"Exec optimize_page failed. Error:{repr(e)}\n")
-        logger.write_log(traceback.format_exc())
+        logger.log_exception("页面优化失败.", e)
         return
 
 
@@ -118,9 +140,11 @@ async def get_video_attr(page, attr: str) -> any:
         await page.wait_for_selector("video", state="attached", timeout=1000)
         attr = await page.evaluate(f'''document.querySelector('video').{attr}''')
         return attr
+    except TargetClosedError as e:
+        logger.debug(f"浏览器关闭时停止读取视频属性 {attr}: {logger.summarize_exception(e)}")
+        return None
     except Exception as e:
-        logger.write_log(f"Exec get_video_attr failed. Error:{repr(e)}\n")
-        logger.write_log(traceback.format_exc())
+        logger.log_exception(f"读取视频属性失败. attr: {attr}", e)
         return None
 
 
@@ -152,7 +176,7 @@ async def get_filtered_class(page: Page, is_new_version=False, is_hike_class=Fal
         all_class = await page.locator(".file-item").all()
         if include_all:
             pass
-            # logger.write_log(f"Get to-review class: {len(all_class)}\n")
+            # logger.debug(f"Get to-review class: {len(all_class)}")
             # return all_class
         else:
             to_learn_class = []
@@ -160,13 +184,13 @@ async def get_filtered_class(page: Page, is_new_version=False, is_hike_class=Fal
                 isDone = await each.locator(".icon-finish").count()
                 if not isDone:
                     to_learn_class.append(each)
-            logger.write_log(f"Get to-learn class: {len(all_class)}\n")
+            logger.debug(f"Get to-learn class: {len(all_class)}")
             return to_learn_class
 
     else:
         all_class = await page.locator(".clearfix.video").all()
         if include_all:
-            logger.write_log(f"Get to-review class: {len(all_class)}\n")
+            logger.debug(f"Get to-review class: {len(all_class)}")
             return all_class
         else:
             to_learn_class = []
@@ -178,5 +202,6 @@ async def get_filtered_class(page: Page, is_new_version=False, is_hike_class=Fal
                     isDone = await each.locator(".time_icofinish").count()
                 if not isDone:
                     to_learn_class.append(each)
-            logger.write_log(f"Get to-learn class: {len(all_class)}\n")
+            logger.debug(f"Get to-learn class: {len(all_class)}")
             return to_learn_class
+

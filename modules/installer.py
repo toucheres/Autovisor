@@ -1,7 +1,6 @@
 import re
 import sys
 import platform
-import traceback
 import zipfile
 import os
 import requests
@@ -12,6 +11,40 @@ from modules.configs import Config
 
 config = Config()
 logger = Logger()
+
+
+def normalize_version(package, version):
+    if package == "opencv-python":
+        return ".".join(version.split(".")[:3])
+    return version
+
+
+def get_runtime_root():
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def get_res_dir():
+    return os.path.join(get_runtime_root(), "res")
+
+
+def add_runtime_search_paths(res_dir):
+    runtime_paths = [
+        res_dir,
+        os.path.join(res_dir, "cv2"),
+        os.path.join(res_dir, "numpy.libs"),
+    ]
+    for path in runtime_paths:
+        if not os.path.isdir(path):
+            continue
+        if path not in sys.path:
+            sys.path.insert(0, path)
+        if os.name == "nt":
+            try:
+                os.add_dll_directory(path)
+            except (AttributeError, FileNotFoundError, OSError):
+                pass
 
 
 def test_mirrors():
@@ -98,6 +131,11 @@ def is_installed(package, version):
     try:
         # 尝试导入 package
         module = import_module(mapping[package])
+        installed_version = getattr(module, "__version__", None)
+        expected_version = normalize_version(package, version)
+        if installed_version and installed_version != expected_version:
+            logger.warn(f"检测到 {package}-{installed_version}，与目标版本 {version} 不一致，将重新安装。")
+            return None, False
         logger.info(f"{package}-{version} 已安装！")
         return module, True
     except ImportError:
@@ -106,27 +144,30 @@ def is_installed(package, version):
 
 def install_package(package, version, mirror_name, base_url):
     alias = mapping[package]
+    res_dir = get_res_dir()
     logger.info(f"{package}-{version} 未安装，开始下载...")
 
     try:
         wheel_path = download_wheel(mirror_name, base_url, package, version)
-        extract_whl(wheel_path, "./res")
+        extract_whl(wheel_path, res_dir)
+        add_runtime_search_paths(res_dir)
         logger.info(f"{package}-{version} 安装完成!")
 
         os.remove(wheel_path)  # 清理下载的 .whl 文件
         return import_module(alias)
 
     except Exception as e:
-        error_message = f"{package}-{version} 处理失败！\n错误详情: {repr(e)}"
-        logger.write_log(f"[ERROR] {error_message}\n{traceback.format_exc()}")
-        logger.error(error_message)
+        error_message = f"{package}-{version} 处理失败！"
+        logger.log_exception(error_message, e)
         return None
 
 
 # 下载器,启动!
 def start():
     modules = []
-    sys.path.append("./res")
+    res_dir = get_res_dir()
+    os.makedirs(res_dir, exist_ok=True)
+    add_runtime_search_paths(res_dir)
     mirror_name, base_url = None, None  # 避免重复测试镜像
     for package, version in packages.items():
         module, exist = is_installed(package, version)

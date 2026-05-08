@@ -29,9 +29,13 @@ async def get_course_progress(page: Page, is_new_version=False, is_hike_class=Fa
     await move_mouse(page)
     if is_hike_class:
         cur_play = await page.query_selector(".file-item.active")
+        if not cur_play:
+            return "100%"
         progress = await cur_play.query_selector(".rate")
     else:
         cur_play = await page.query_selector(".current_play")
+        if not cur_play:
+            return "100%"
         progress = await cur_play.query_selector(".progress-num")
     if not progress:
         if not is_hike_class:
