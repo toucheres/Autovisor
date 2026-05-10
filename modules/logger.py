@@ -33,6 +33,11 @@ class Logger:
             return os.path.dirname(sys.executable)
         return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+    @staticmethod
+    def summarize_exception(exc):
+        first_line = str(exc).splitlines()[0].strip()
+        return f"{type(exc).__name__}: {first_line}"
+
     def write_log(self, msg):
         date = time.strftime("%H:%M:%S", time.localtime())
         record = f"[{date}] {msg}"
@@ -56,17 +61,12 @@ class Logger:
             self.write_log("\n".join(detail_lines) + "\n")
         self.write_log(f"{tb}\n")
 
-    def debug(self, msg):
-        self.write_log(f"[DEBUG] {msg}\n")
-
-    @staticmethod
-    def summarize_exception(exc):
-        first_line = str(exc).splitlines()[0].strip()
-        return f"{type(exc).__name__}: {first_line}"
-
     def save(self, inform=True):
         if inform:
-            print(f"日志文件已保存至: {self.filename}")
+            print(f"\n日志文件已保存至: {self.filename}")
+
+    def debug(self, msg):
+        self.write_log(f"[DEBUG] {msg}\n")
 
     def info(self, msg, shift=False):
         if shift:

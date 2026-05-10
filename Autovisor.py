@@ -23,6 +23,17 @@ event_loop_verify = asyncio.Event()
 event_loop_answer = asyncio.Event()
 COOKIE_PATH = get_runtime_path("res", "cookies.json")
 
+
+async def wait_for_interruption(event_loop: asyncio.Event) -> float:
+    event_loop.clear()
+    wait_start = time.time()
+    await event_loop.wait()
+    return time.time() - wait_start
+
+
+def cal_time_period(start_time: float, paused_time: float) -> float:
+    return max(0.0, time.time() - start_time - paused_time)
+
 async def init_page(p: Playwright, cookies) -> tuple[Page, BrowserContext]:
     driver = "msedge" if config.driver == "edge" else config.driver
     logger.info(f"正在启动{config.driver}浏览器...")
@@ -113,58 +124,62 @@ async def ensure_login(context: BrowserContext, page: Page, cookies, modules=Non
 
 
 async def learning_loop(page: Page, start_time, is_new_version=False, is_hike_class=False):
+    paused_time = 0.0
     try:
         cur_time = await get_course_progress(page, is_new_version, is_hike_class)
     except TargetClosedError:
-        return
+        return paused_time
     while cur_time != "100%":
         try:
             limit_time = config.limitMaxTime
-            time_period = (time.time() - start_time) / 60
+            time_period = cal_time_period(start_time, paused_time) / 60
             if 0 < limit_time <= time_period:
                 break
             cur_time = await get_course_progress(page, is_new_version, is_hike_class)
             show_course_progress(desc="完成进度:", cur_time=cur_time)
             await asyncio.sleep(0.5)
         except TargetClosedError:
-            return
+            return paused_time
         except TimeoutError as e:
             if await page.query_selector(".yidun_modal__title"):
-                await event_loop_verify.wait()
+                paused_time += await wait_for_interruption(event_loop_verify)
             elif await page.query_selector(".topic-title"):
-                await event_loop_answer.wait()
+                paused_time += await wait_for_interruption(event_loop_answer)
             else:
                 logger.debug(f"学习进度轮询未命中: {logger.summarize_exception(e)}")
+    return paused_time
 
 
 async def review_loop(page: Page, start_time, is_hike_class=False):
+    paused_time = 0.0
     total_time = await get_video_attr(page, "duration")
     if total_time is None:
-        return
+        return paused_time
     try:
         await page.evaluate(config.reset_curtime)  # 重置视频播放时间
     except TargetClosedError:
-        return
+        return paused_time
     while True:
         try:
             limit_time = config.limitMaxTime
             cur_time = await get_video_attr(page, "currentTime")
             if cur_time is None or cur_time >= total_time:
                 break
-            time_period = (time.time() - start_time) / 60
+            time_period = cal_time_period(start_time, paused_time) / 60
             if 0 < limit_time <= time_period:
                 break
             show_course_progress(desc="完成进度:", cur_time=time_period, limit_time=limit_time)
             await asyncio.sleep(0.5)
         except TargetClosedError:
-            return
+            return paused_time
         except TimeoutError as e:
             if await page.query_selector(".yidun_modal__title"):
-                await event_loop_verify.wait()
+                paused_time += await wait_for_interruption(event_loop_verify)
             elif await page.query_selector(".topic-title"):
-                await event_loop_answer.wait()
+                paused_time += await wait_for_interruption(event_loop_answer)
             else:
                 logger.debug(f"复习进度轮询未命中: {logger.summarize_exception(e)}")
+    return paused_time
 
 
 async def working_loop(page: Page, is_new_version=False, is_hike_class=False):
@@ -180,6 +195,7 @@ async def working_loop(page: Page, is_new_version=False, is_hike_class=False):
     else:
         all_class = await get_filtered_class(page, is_new_version, is_hike_class, include_all=True)
     start_time = time.time()
+    paused_time = 0.0
     cur_index = 0
 
     while cur_index < len(all_class):
@@ -196,24 +212,24 @@ async def working_loop(page: Page, is_new_version=False, is_hike_class=False):
         await page.wait_for_selector("video", state="attached")
         await page.evaluate(config.remove_pause)
         if learning:
-            await learning_loop(page, start_time, is_new_version, is_hike_class)
+            paused_time += await learning_loop(page, start_time, is_new_version, is_hike_class)
         else:
-            await review_loop(page, start_time, is_hike_class)
+            paused_time += await review_loop(page, start_time, is_hike_class)
         if is_hike_class is False:
             if "current_play" in await all_class[cur_index].get_attribute('class'):
                 cur_index += 1
         else:
             if "active" in await all_class[cur_index].get_attribute('class'):
                 cur_index += 1
-        reachTimeLimit = await check_time_limit(page, start_time, all_class, title, is_hike_class)
+        reachTimeLimit = await check_time_limit(page, start_time, paused_time, all_class, title, is_hike_class)
         if reachTimeLimit:
             return
 
 
-async def check_time_limit(page: Page, start_time, all_class, title, is_hike_class) -> bool:
+async def check_time_limit(page: Page, start_time, paused_time, all_class, title, is_hike_class) -> bool:
     reachTimeLimit = False
     page.set_default_timeout(24 * 3600 * 1000)
-    time_period = (time.time() - start_time) / 60
+    time_period = cal_time_period(start_time, paused_time) / 60
     if 0 < config.limitMaxTime <= time_period:
         logger.info(f"当前课程已达时限:{config.limitMaxTime}min", shift=True)
         logger.info("即将进入下门课程!")
@@ -312,7 +328,7 @@ if __name__ == "__main__":
         logger.info("程序启动中...")
         config = Config("configs.ini")
         if not config.course_urls:
-            logger.info("未检测到有效网址或不支持此类网页,请检查配置文件!")
+            logger.error("未检测到有效网址或不支持此类网页,请检查配置文件!")
             time.sleep(2)
             sys.exit(-1)
         asyncio.run(main())
